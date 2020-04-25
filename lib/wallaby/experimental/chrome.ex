@@ -110,7 +110,8 @@ defmodule Wallaby.Experimental.Chrome do
   @chromedriver_version_regex ~r/^ChromeDriver (\d+)\.(\d+)/
 
   alias Wallaby.{DependencyError, Metadata}
-  alias Wallaby.Experimental.Chrome.{Chromedriver}
+  alias Wallaby.Experimental.Chrome.ServerPool
+  alias Wallaby.Experimental.Chrome.Chromedriver.Server
   alias Wallaby.Experimental.Selenium.WebdriverClient
   import Wallaby.Driver.LogChecker
 
@@ -145,7 +146,7 @@ defmodule Wallaby.Experimental.Chrome do
   def init(:ok) do
     children = [
       Wallaby.Driver.LogStore,
-      Wallaby.Experimental.Chrome.Chromedriver
+      Wallaby.Experimental.Chrome.ServerPool
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -213,9 +214,9 @@ defmodule Wallaby.Experimental.Chrome do
   @doc false
   @spec start_session([start_session_opts]) :: Wallaby.Driver.on_start_session() | no_return
   def start_session(opts \\ []) do
-    opts |> Keyword.get(:readiness_timeout, @default_readiness_timeout) |> wait_until_ready!()
+    {:ok, server} = ServerPool.checkout()
 
-    base_url = Chromedriver.base_url()
+    base_url = Server.get_base_url(server)
     create_session_fn = Keyword.get(opts, :create_session_fn, &WebdriverClient.create_session/2)
 
     capabilities = Keyword.get(opts, :capabilities, capabilities_from_config(opts))
@@ -228,7 +229,7 @@ defmodule Wallaby.Experimental.Chrome do
         url: base_url <> "session/#{id}",
         id: id,
         driver: __MODULE__,
-        server: Chromedriver,
+        server: server,
         capabilities: capabilities
       }
 
@@ -247,18 +248,12 @@ defmodule Wallaby.Experimental.Chrome do
     |> put_binary_config()
   end
 
-  @spec wait_until_ready!(timeout) :: :ok | no_return
-  defp wait_until_ready!(timeout) do
-    case Chromedriver.wait_until_ready(timeout) do
-      :ok -> :ok
-      {:error, :timeout} -> raise "timeout waiting for chromedriver to be ready"
-    end
-  end
-
   @doc false
   def end_session(%Wallaby.Session{} = session, opts \\ []) do
     end_session_fn = Keyword.get(opts, :end_session_fn, &WebdriverClient.delete_session/1)
     end_session_fn.(session)
+
+    ServerPool.check_in(session.server)
     :ok
   end
 

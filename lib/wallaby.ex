@@ -36,7 +36,10 @@ defmodule Wallaby do
     children = [
       supervisor(Wallaby.Driver.ProcessWorkspace.ServerSupervisor, []),
       supervisor(driver(), [[name: Wallaby.Driver.Supervisor]]),
-      :hackney_pool.child_spec(:wallaby_pool, timeout: 15_000, max_connections: 4),
+      :hackney_pool.child_spec(:wallaby_pool,
+        timeout: 15_000,
+        max_connections: System.schedulers_online()
+      ),
       worker(Wallaby.SessionStore, [])
     ]
 

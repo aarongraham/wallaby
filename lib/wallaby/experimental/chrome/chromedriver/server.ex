@@ -14,7 +14,6 @@ defmodule Wallaby.Experimental.Chrome.Chromedriver.Server do
     @type t :: %__MODULE__{
             port_number: port_number | nil,
             chromedriver_path: String.t(),
-            ready?: boolean(),
             calls_awaiting_readiness: [GenServer.from()]
           }
   end
@@ -54,53 +53,18 @@ defmodule Wallaby.Experimental.Chrome.Chromedriver.Server do
 
   @impl true
   def init({chromedriver_path, opts}) do
-    startup_timeout = Keyword.get(opts, :startup_timeout, @default_startup_timeout)
-    Process.send_after(self(), :ensure_readiness, startup_timeout)
-
-    {:ok, %State{chromedriver_path: chromedriver_path}, {:continue, :start_chromedriver}}
-  end
-
-  @impl true
-  def handle_continue(:start_chromedriver, state) do
-    %State{chromedriver_path: chromedriver_path} = state
-
     port_number = Utils.find_available_port()
+    base_url = build_base_url(port_number)
+
     open_chromedriver_port(chromedriver_path, port_number)
+    ReadinessChecker.wait_until_ready(base_url)
 
-    check_readiness_async(port_number)
-
-    {:noreply, %State{state | port_number: port_number}}
-  end
-
-  @impl true
-  def handle_info(:ensure_readiness, %State{ready?: true} = state), do: {:noreply, state}
-
-  def handle_info(:ensure_readiness, %State{ready?: false}) do
-    raise "chromedriver not ready after startup timeout"
-  end
-
-  def handle_info(:ready, state) do
-    %State{calls_awaiting_readiness: calls_awaiting_readiness} = state
-
-    for call <- calls_awaiting_readiness do
-      GenServer.reply(call, :ok)
-    end
-
-    {:noreply, %State{state | calls_awaiting_readiness: [], ready?: true}}
+    {:ok, %State{chromedriver_path: chromedriver_path, port_number: port_number}}
   end
 
   @impl true
   def handle_call(:get_port_number, _from, %State{port_number: port_number} = state) do
     {:reply, port_number, state}
-  end
-
-  def handle_call(:wait_until_ready, _from, %State{ready?: true} = state) do
-    {:reply, :ok, state}
-  end
-
-  def handle_call(:wait_until_ready, from, %State{ready?: false} = state) do
-    %State{calls_awaiting_readiness: calls_awaiting_readiness} = state
-    {:noreply, %State{state | calls_awaiting_readiness: [from | calls_awaiting_readiness]}}
   end
 
   @spec open_chromedriver_port(String.t(), port_number) :: port
@@ -132,16 +96,6 @@ defmodule Wallaby.Experimental.Chrome.Chromedriver.Server do
       :exit_status,
       args: args(chromedriver, tcp_port)
     ]
-
-  defp check_readiness_async(port_number) do
-    process_to_notify = self()
-    base_url = build_base_url(port_number)
-
-    Task.start_link(fn ->
-      ReadinessChecker.wait_until_ready(base_url)
-      send(process_to_notify, :ready)
-    end)
-  end
 
   @spec build_base_url(port_number) :: String.t()
   defp build_base_url(port_number) do
